@@ -75,27 +75,33 @@ def load_params_from_excel_bytes(excel_bytes: bytes, sheet_name: str) -> dict:
     return out
 
 
+@st.cache_data(show_spinner=False)
+def load_excel_bytes_from_path(path: str) -> bytes:
+    with open(path, "rb") as f:
+        return f.read()
+
+
 def get_excel_bytes_from_sidebar() -> bytes | None:
     st.sidebar.markdown("### Dados (Excel)")
-    uploaded = st.sidebar.file_uploader(
-        "Carregar .xlsx",
-        type=["xlsx"],
-        help="Faça upload do arquivo ADW-Demo-COI.xlsx para iniciar.",
+    input_mode = st.sidebar.radio(
+        "Fonte dos dados",
+        ["✏️ Inserir manualmente", "📂 Upload Excel"],
+        index=0,
+        help="Manual: use os campos interativos com valores padrão. Excel: carrega premissas do arquivo.",
     )
 
-    if uploaded is not None:
-        return uploaded.read()
+    if input_mode == "📂 Upload Excel":
+        uploaded = st.sidebar.file_uploader("Carregar .xlsx", type=["xlsx"])
+        if uploaded is not None:
+            return uploaded.read()
+        try:
+            return load_excel_bytes_from_path(DEFAULT_EXCEL_PATH)
+        except FileNotFoundError:
+            st.sidebar.info("ℹ️ Arquivo local não encontrado. Usando valores padrão.")
+            return None
 
-    # Tenta o arquivo local (só funciona em ambiente local/dev)
-    try:
-        with open(DEFAULT_EXCEL_PATH, "rb") as f:
-            return f.read()
-    except FileNotFoundError:
-        st.sidebar.warning(
-            "⚠️ Nenhum arquivo carregado.\n\n"
-            "Faça o upload do `.xlsx` acima para continuar."
-        )
-        return None
+    return None  # Modo manual: sem Excel, usa defaults hardcoded
+
 
 
 # -----------------------------
@@ -267,8 +273,12 @@ def render_calc_1(excel_bytes: bytes) -> None:
             "no session_state para a Calculadora 2."
         )
 
+if excel_bytes is not None:
     params_ret = load_params_from_excel_bytes(excel_bytes, SHEET_RETENTION)
     params_nrr = load_params_from_excel_bytes(excel_bytes, SHEET_NRR)
+else:
+    params_ret = {}
+    params_nrr = {}
 
     d_total_agents = _safe_float(params_ret.get("Total Agents", 1200))
     d_hours_per_agent = _safe_float(params_ret.get("Hours per agent", 2080))
@@ -551,16 +561,27 @@ def build_summary_markdown(calc1_out: dict, bi_out: dict) -> str:
 
 
 
+def _sanitize_pdf(text: str) -> str:
+    """Converte caracteres fora do latin-1 para equivalentes ASCII."""
+    replacements = {
+        "∞": "inf", "×": "x", "≤": "<=", "≥": ">=",
+        "\u2019": "'", "\u2018": "'", "\u201c": '"', "\u201d": '"',
+        "\u2013": "-", "\u2014": "-", "R$": "BRL",
+    }
+    for char, rep in replacements.items():
+        text = text.replace(char, rep)
+    return text.encode("latin-1", errors="replace").decode("latin-1")
+
+
 def markdown_to_pdf_bytes(md_text: str) -> bytes:
     pdf = FPDF()
     pdf.set_margins(left=15, top=15, right=15)
     pdf.set_auto_page_break(auto=True, margin=12)
     pdf.add_page()
-
     usable_w = pdf.w - pdf.l_margin - pdf.r_margin
 
     for line in md_text.splitlines():
-        clean = line.replace("#", "").replace("*", "").strip()
+        clean = _sanitize_pdf(line.replace("#", "").replace("*", "").strip())
         if not clean:
             pdf.ln(4)
             continue
@@ -571,9 +592,8 @@ def markdown_to_pdf_bytes(md_text: str) -> bytes:
         pdf.multi_cell(usable_w, 6, clean)
 
     raw = pdf.output(dest="S")
-    if isinstance(raw, (bytes, bytearray)):
-        return bytes(raw)
-    return raw.encode("latin-1", errors="replace")
+    return bytes(raw) if isinstance(raw, (bytes, bytearray)) else raw.encode("latin-1", errors="replace")
+
 
 
 def render_calc_2() -> None:
@@ -694,15 +714,13 @@ def main() -> None:
     )
 
     excel_bytes = get_excel_bytes_from_sidebar()
-
-    if excel_bytes is None:
-        st.info("📂 Faça o upload do arquivo Excel na barra lateral para começar.")
-        st.stop()
+    # Não bloqueia mais: modo manual funciona sem Excel
 
     if page.startswith("Calculadora 1"):
         render_calc_1(excel_bytes)
     else:
         render_calc_2()
+
 
 
 if __name__ == "__main__":
