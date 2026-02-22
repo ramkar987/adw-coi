@@ -516,30 +516,39 @@ def df_to_excel_bytes(sheets: dict) -> bytes:
 
 def build_summary_markdown(calc1_out: dict, bi_out: dict) -> str:
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    lines = [
-        "# Resumo - COI & Business Impact",
-        f"- Gerado em: {ts}",
-        "",
-        "## Calculadora 1 (COI)",
-        f"- Mode: {calc1_out.get('mode')}",
-        f"- Labor inefficiency: {fmt_currency(calc1_out.get('labor_inefficiency_cost', 0.0))}",
-        f"- Revenue at risk: {fmt_currency(calc1_out.get('revenue_at_risk', 0.0))}",
-    ]
+
+    # Resolve os valores ANTES do f-string para evitar backslash em expressão
+    pb = bi_out.get("payback_months", np.inf)
+    pb_str = "inf" if np.isinf(pb) else f"{pb:.1f}"
+
+    roi = bi_out.get("roi", np.nan)
+    roi_str = "n/a" if np.isnan(roi) else f"{roi:.2f}x"
+
+    upsell_line = ""
     if calc1_out.get("mode") == "NRR":
-        lines.append(f"- Upsell shortfall risk: {fmt_currency(calc1_out.get('upsell_revenue_at_risk_shortfall', 0.0))}")
-    lines += [
-        f"- Total Cost of Inaction: {fmt_currency(calc1_out.get('total_cost_of_inaction', 0.0))}",
-        "",
-        "## Calculadora 2 (Business Impact)",
-        f"- Cenario: {bi_out.get('scenario')}",
-        f"- Gross benefit: {fmt_currency(bi_out.get('gross_benefit', 0.0))}",
-        f"- Annual solution cost: {fmt_currency(bi_out.get('annual_solution_cost', 0.0))}",
-        f"- Net impact: {fmt_currency(bi_out.get('net_impact', 0.0))}",
-        f"- Payback (meses): {('inf' if np.isinf(bi_out.get('payback_months', np.inf)) else f\"{bi_out['payback_months']:.1f}\")}",
-        f"- ROI: {('n/a' if np.isnan(bi_out.get('roi', np.nan)) else f\"{bi_out['roi']:.2f}x\")}",
-        "",
-    ]
-    return "\n".join(lines)
+        upsell_line = f"- Upsell shortfall risk: {fmt_currency(calc1_out.get('upsell_revenue_at_risk_shortfall', 0.0))}\n"
+
+    lines = (
+        f"# Resumo - COI & Business Impact\n"
+        f"- Gerado em: {ts}\n"
+        f"\n"
+        f"## Calculadora 1 (COI)\n"
+        f"- Mode: {calc1_out.get('mode')}\n"
+        f"- Labor inefficiency: {fmt_currency(calc1_out.get('labor_inefficiency_cost', 0.0))}\n"
+        f"- Revenue at risk: {fmt_currency(calc1_out.get('revenue_at_risk', 0.0))}\n"
+        f"{upsell_line}"
+        f"- Total Cost of Inaction: {fmt_currency(calc1_out.get('total_cost_of_inaction', 0.0))}\n"
+        f"\n"
+        f"## Calculadora 2 (Business Impact)\n"
+        f"- Cenario: {bi_out.get('scenario')}\n"
+        f"- Gross benefit: {fmt_currency(bi_out.get('gross_benefit', 0.0))}\n"
+        f"- Annual solution cost: {fmt_currency(bi_out.get('annual_solution_cost', 0.0))}\n"
+        f"- Net impact: {fmt_currency(bi_out.get('net_impact', 0.0))}\n"
+        f"- Payback (meses): {pb_str}\n"
+        f"- ROI: {roi_str}\n"
+    )
+    return lines
+
 
 
 def markdown_to_pdf_bytes(md_text: str) -> bytes:
