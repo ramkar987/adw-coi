@@ -565,19 +565,33 @@ def build_summary_markdown(calc1_out: dict, bi_out: dict) -> str:
 
 
 def markdown_to_pdf_bytes(md_text: str) -> bytes:
-    # PDF simples (texto) para evitar dependências pesadas.
     pdf = FPDF()
+    pdf.set_margins(left=15, top=15, right=15)
     pdf.set_auto_page_break(auto=True, margin=12)
     pdf.add_page()
-    pdf.set_font("Helvetica", size=11)
+
+    # Largura real da área de texto (evita o FPDFException)
+    usable_w = pdf.w - pdf.l_margin - pdf.r_margin
 
     for line in md_text.splitlines():
-        # remove markdown básico (bem simples)
         clean = line.replace("#", "").strip()
-        pdf.multi_cell(0, 6, clean)
+        if not clean:
+            pdf.ln(4)          # linha vazia → espaçamento
+            continue
 
-    out = pdf.output(dest="S").encode("latin-1", errors="replace")
-    return out
+        # Destaque visual para "títulos" (linhas que tinham #)
+        if line.lstrip().startswith("#"):
+            pdf.set_font("Helvetica", style="B", size=13)
+        else:
+            pdf.set_font("Helvetica", size=11)
+
+        pdf.multi_cell(usable_w, 6, clean)
+
+    raw = pdf.output(dest="S")          # fpdf2 >= 2.7 retorna bytearray
+    if isinstance(raw, (bytes, bytearray)):
+        return bytes(raw)
+    return raw.encode("latin-1", errors="replace")
+
 
 
 def render_calc_2() -> None:
