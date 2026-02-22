@@ -598,25 +598,60 @@ def build_summary_markdown(calc1_out: dict, bi_out: dict) -> str:
 
 
 def markdown_to_pdf_bytes(md_text: str) -> bytes:
+    """Gera PDF com layout simples mas confiavel."""
     pdf = FPDF()
-    pdf.set_margins(left=15, top=15, right=15)
-    pdf.set_auto_page_break(auto=True, margin=12)
+    pdf.set_margins(left=12, top=12, right=12)
+    pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
-    usable_w = pdf.w - pdf.l_margin - pdf.r_margin
+    
+    # Fonte base
+    pdf.set_font("Helvetica", size=11)
+    usable_w = pdf.w - 24  # 12mm margin * 2
+    line_height = 5
 
     for line in md_text.splitlines():
-        clean = _sanitize_pdf(line.replace("#", "").replace("*", "").strip())
+        # Remove markup
+        clean = line.replace("#", "").replace("*", "").strip()
+        
+        # Sanitiza para latin-1
+        try:
+            clean = clean.encode("latin-1", errors="replace").decode("latin-1")
+        except Exception:
+            clean = ""
+        
         if not clean:
-            pdf.ln(4)
+            pdf.ln(line_height)
             continue
-        if line.lstrip().startswith("#"):
-            pdf.set_font("Helvetica", style="B", size=13)
-        else:
-            pdf.set_font("Helvetica", size=11)
-        pdf.multi_cell(usable_w, 6, clean)
 
-    raw = pdf.output(dest="S")
-    return bytes(raw) if isinstance(raw, (bytes, bytearray)) else raw.encode("latin-1", errors="replace")
+        # Detecta headings (tinha # antes)
+        is_heading = line.lstrip().startswith("#")
+        
+        if is_heading:
+            pdf.set_font("Helvetica", style="B", size=12)
+            pdf.ln(2)  # espaco antes do heading
+        else:
+            pdf.set_font("Helvetica", size=10)
+
+        # Escreve linha com quebra automática
+        try:
+            pdf.multi_cell(w=usable_w, h=line_height, txt=clean, border=0)
+        except Exception as e:
+            # Fallback: escreve normalmente sem quebra
+            pdf.cell(0, line_height, txt=clean[:50], ln=True)
+
+        if is_heading:
+            pdf.ln(1)  # espaco depois do heading
+
+    # Gera bytes
+    try:
+        raw = pdf.output(dest="S")
+        if isinstance(raw, (bytes, bytearray)):
+            return bytes(raw)
+        return raw.encode("latin-1", errors="replace")
+    except Exception as e:
+        st.error(f"Erro ao gerar PDF: {e}")
+        return b""
+
 
 
 def render_calc_2() -> None:
