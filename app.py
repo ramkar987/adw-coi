@@ -83,16 +83,28 @@ def load_excel_bytes_from_path(path: str) -> bytes:
         return f.read()
 
 
-def get_excel_bytes_from_sidebar() -> bytes:
+def get_excel_bytes_from_sidebar() -> bytes | None:
     st.sidebar.markdown("### Dados (Excel)")
     uploaded = st.sidebar.file_uploader(
-        "Carregar .xlsx (opcional)",
+        "Carregar .xlsx",
         type=["xlsx"],
-        help="Se não carregar, o app tenta usar o arquivo do repositório.",
+        help="Faça upload do arquivo ADW-Demo-COI.xlsx para iniciar.",
     )
+
     if uploaded is not None:
         return uploaded.read()
-    return load_excel_bytes_from_path(DEFAULT_EXCEL_PATH)
+
+    # Tenta o arquivo local (só funciona em dev/local)
+    try:
+        with open(DEFAULT_EXCEL_PATH, "rb") as f:
+            return f.read()
+    except FileNotFoundError:
+        st.sidebar.warning(
+            "⚠️ Nenhum arquivo carregado.\n\n"
+            "Faça o upload do `.xlsx` acima para continuar."
+        )
+        return None
+
 
 
 # -----------------------------
