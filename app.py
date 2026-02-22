@@ -20,29 +20,27 @@ SHEET_RETENTION = "COI Retention"
 SHEET_NRR = "COI NRR"
 
 
-# -----------------------------
+# ─────────────────────────────────────────
 # Utilities
-# -----------------------------
-def _safe_float(x, default=0.0) -> float:
+# ─────────────────────────────────────────
+def _safe_float(x, default: float = 0.0) -> float:
     try:
         if x is None:
             return default
         if isinstance(x, (int, float, np.number)):
             return float(x)
         s = str(x).strip().replace(",", "")
-        if s == "":
-            return default
-        return float(s)
+        return float(s) if s else default
     except Exception:
         return default
 
 
 def fmt_currency(v: float) -> str:
-    return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    return f"BRL {v:,.2f}"
 
 
 def fmt_number(v: float) -> str:
-    return f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    return f"{v:,.2f}"
 
 
 def poisson_prob_ge_2(lmbda: float) -> float:
@@ -51,28 +49,36 @@ def poisson_prob_ge_2(lmbda: float) -> float:
 
 
 def scenario_multipliers(scenario: str) -> dict:
-    scenario = (scenario or "").lower()
-    if scenario.startswith("con"):
+    s = (scenario or "").lower()
+    if s.startswith("con"):
         return {"rev_mult": 0.70, "churn_mult": 0.70, "eff_mult": 0.70}
-    if scenario.startswith("agr"):
+    if s.startswith("agr"):
         return {"rev_mult": 1.30, "churn_mult": 1.30, "eff_mult": 1.20}
     return {"rev_mult": 1.00, "churn_mult": 1.00, "eff_mult": 1.00}
 
 
-# -----------------------------
+def _sanitize_pdf(text: str) -> str:
+    """Converte caracteres fora do latin-1 para equivalentes ASCII."""
+    replacements = {
+        "∞": "inf", "×": "x", "≤": "<=", "≥": ">=",
+        "\u2019": "'", "\u2018": "'", "\u201c": '"', "\u201d": '"',
+        "\u2013": "-", "\u2014": "-",
+    }
+    for char, rep in replacements.items():
+        text = text.replace(char, rep)
+    return text.encode("latin-1", errors="replace").decode("latin-1")
+
+
+# ─────────────────────────────────────────
 # Data loading
-# -----------------------------
+# ─────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def load_params_from_excel_bytes(excel_bytes: bytes, sheet_name: str) -> dict:
     df = pd.read_excel(io.BytesIO(excel_bytes), sheet_name=sheet_name, engine="openpyxl")
     df = df.rename(columns={c: c.strip() for c in df.columns})
     if "Parameter" not in df.columns or "Input" not in df.columns:
         raise ValueError(f"A aba '{sheet_name}' precisa ter colunas 'Parameter' e 'Input'.")
-    out = {}
-    for _, row in df.iterrows():
-        k = str(row["Parameter"]).strip()
-        out[k] = _safe_float(row["Input"])
-    return out
+    return {str(row["Parameter"]).strip(): _safe_float(row["Input"]) for _, row in df.iterrows()}
 
 
 @st.cache_data(show_spinner=False)
@@ -87,7 +93,7 @@ def get_excel_bytes_from_sidebar() -> bytes | None:
         "Fonte dos dados",
         ["✏️ Inserir manualmente", "📂 Upload Excel"],
         index=0,
-        help="Manual: use os campos interativos com valores padrão. Excel: carrega premissas do arquivo.",
+        help="Manual: usa os campos interativos com valores padrão. Excel: carrega premissas do arquivo.",
     )
 
     if input_mode == "📂 Upload Excel":
@@ -97,47 +103,44 @@ def get_excel_bytes_from_sidebar() -> bytes | None:
         try:
             return load_excel_bytes_from_path(DEFAULT_EXCEL_PATH)
         except FileNotFoundError:
-            st.sidebar.info("ℹ️ Arquivo local não encontrado. Usando valores padrão.")
+            st.sidebar.info("ℹ️ Arquivo local nao encontrado. Usando valores padrao.")
             return None
 
     return None  # Modo manual: sem Excel, usa defaults hardcoded
 
 
-
-# -----------------------------
-# Calculator 1: COI (Retention / NRR)
-# -----------------------------
+# ─────────────────────────────────────────
+# Calculator 1 — COI Retention
+# ─────────────────────────────────────────
 def calc_coi_retention(inp: dict) -> dict:
-    total_agents = _safe_float(inp.get("total_agents"))
-    hours_per_agent = _safe_float(inp.get("hours_per_agent"))
-    pct_hours_impaired = _safe_float(inp.get("pct_hours_impaired"))
-    calls_per_agent = _safe_float(inp.get("calls_per_agent"))
-    pct_calls_impaired = _safe_float(inp.get("pct_calls_impaired"))
-    customers = _safe_float(inp.get("customers"))
-    calls_per_customer = _safe_float(inp.get("calls_per_customer"))
+    total_agents               = _safe_float(inp.get("total_agents"))
+    hours_per_agent            = _safe_float(inp.get("hours_per_agent"))
+    pct_hours_impaired         = _safe_float(inp.get("pct_hours_impaired"))
+    calls_per_agent            = _safe_float(inp.get("calls_per_agent"))
+    pct_calls_impaired         = _safe_float(inp.get("pct_calls_impaired"))
+    customers                  = _safe_float(inp.get("customers"))
+    calls_per_customer         = _safe_float(inp.get("calls_per_customer"))
     calls_per_at_risk_customer = _safe_float(inp.get("calls_per_at_risk_customer"))
-    switching_rate_2plus = _safe_float(inp.get("switching_rate_2plus"))
-    baseline_churn_rate = _safe_float(inp.get("baseline_churn_rate"))
-    active_churn_share = _safe_float(inp.get("active_churn_share"))
-    cx_driven_share = _safe_float(inp.get("cx_driven_share"))
-    arpu = _safe_float(inp.get("arpu"))
-    cost_per_hour = _safe_float(inp.get("cost_per_hour"))
+    switching_rate_2plus       = _safe_float(inp.get("switching_rate_2plus"))
+    baseline_churn_rate        = _safe_float(inp.get("baseline_churn_rate"))
+    active_churn_share         = _safe_float(inp.get("active_churn_share"))
+    cx_driven_share            = _safe_float(inp.get("cx_driven_share"))
+    arpu                       = _safe_float(inp.get("arpu"))
+    cost_per_hour              = _safe_float(inp.get("cost_per_hour"))
 
-    total_agent_hours = total_agents * hours_per_agent
-    hours_impaired = total_agent_hours * pct_hours_impaired
-    total_calls = total_agents * calls_per_agent
-    calls_impaired = total_calls * pct_calls_impaired
-    baseline_churned_customers = customers * baseline_churn_rate
-    active_churn_customers = baseline_churned_customers * active_churn_share
-    cx_driven_churns = active_churn_customers * cx_driven_share
-
-    lmbda = calls_per_at_risk_customer * pct_calls_impaired
-    prob_2plus = poisson_prob_ge_2(lmbda)
-
-    customers_at_risk = cx_driven_churns * prob_2plus * switching_rate_2plus
-    revenue_at_risk = customers_at_risk * arpu
-    labor_ineff_cost = hours_impaired * cost_per_hour
-    total_coi = labor_ineff_cost + revenue_at_risk
+    total_agent_hours         = total_agents * hours_per_agent
+    hours_impaired            = total_agent_hours * pct_hours_impaired
+    total_calls               = total_agents * calls_per_agent
+    calls_impaired            = total_calls * pct_calls_impaired
+    baseline_churned          = customers * baseline_churn_rate
+    active_churn_customers    = baseline_churned * active_churn_share
+    cx_driven_churns          = active_churn_customers * cx_driven_share
+    lmbda                     = calls_per_at_risk_customer * pct_calls_impaired
+    prob_2plus                = poisson_prob_ge_2(lmbda)
+    customers_at_risk         = cx_driven_churns * prob_2plus * switching_rate_2plus
+    revenue_at_risk           = customers_at_risk * arpu
+    labor_ineff_cost          = hours_impaired * cost_per_hour
+    total_coi                 = labor_ineff_cost + revenue_at_risk
 
     return {
         "total_agents": total_agents,
@@ -155,7 +158,7 @@ def calc_coi_retention(inp: dict) -> dict:
         "probability_2plus_impaired_calls": prob_2plus,
         "switching_rate_2plus": switching_rate_2plus,
         "baseline_churn_rate": baseline_churn_rate,
-        "baseline_churned_customers": baseline_churned_customers,
+        "baseline_churned_customers": baseline_churned,
         "active_churn_share": active_churn_share,
         "active_churn_customers": active_churn_customers,
         "cx_driven_share": cx_driven_share,
@@ -171,49 +174,51 @@ def calc_coi_retention(inp: dict) -> dict:
     }
 
 
+# ─────────────────────────────────────────
+# Calculator 1 — COI NRR
+# ─────────────────────────────────────────
 def calc_coi_nrr(inp: dict) -> dict:
-    total_agents = _safe_float(inp.get("total_agents"))
-    hours_per_agent = _safe_float(inp.get("hours_per_agent"))
-    pct_hours_impaired = _safe_float(inp.get("pct_hours_impaired"))
-    calls_per_agent = _safe_float(inp.get("calls_per_agent"))
-    pct_calls_impaired = _safe_float(inp.get("pct_calls_impaired"))
-    retry_rate = _safe_float(inp.get("retry_rate"))
-    fcr = _safe_float(inp.get("fcr"))
-    csat = _safe_float(inp.get("csat"))
-    ces = _safe_float(inp.get("ces"))
-    ces_divisor = _safe_float(inp.get("ces_divisor"))
-    customers = _safe_float(inp.get("customers"))
-    baseline_churn_rate = _safe_float(inp.get("baseline_churn_rate"))
-    churn_risk_multiplier = _safe_float(inp.get("churn_risk_multiplier"))
-    active_churn_share = _safe_float(inp.get("active_churn_share"))
-    arpu = _safe_float(inp.get("arpu"))
-    upsell_to_churn_ratio = _safe_float(inp.get("upsell_to_churn_ratio"))
-    cost_per_hour = _safe_float(inp.get("cost_per_hour"))
+    total_agents           = _safe_float(inp.get("total_agents"))
+    hours_per_agent        = _safe_float(inp.get("hours_per_agent"))
+    pct_hours_impaired     = _safe_float(inp.get("pct_hours_impaired"))
+    calls_per_agent        = _safe_float(inp.get("calls_per_agent"))
+    pct_calls_impaired     = _safe_float(inp.get("pct_calls_impaired"))
+    retry_rate             = _safe_float(inp.get("retry_rate"))
+    fcr                    = _safe_float(inp.get("fcr"))
+    csat                   = _safe_float(inp.get("csat"))
+    ces                    = _safe_float(inp.get("ces"))
+    ces_divisor            = _safe_float(inp.get("ces_divisor"))
+    customers              = _safe_float(inp.get("customers"))
+    baseline_churn_rate    = _safe_float(inp.get("baseline_churn_rate"))
+    churn_risk_multiplier  = _safe_float(inp.get("churn_risk_multiplier"))
+    active_churn_share     = _safe_float(inp.get("active_churn_share"))
+    arpu                   = _safe_float(inp.get("arpu"))
+    upsell_to_churn_ratio  = _safe_float(inp.get("upsell_to_churn_ratio"))
+    cost_per_hour          = _safe_float(inp.get("cost_per_hour"))
 
-    total_agent_hours = total_agents * hours_per_agent
-    impaired_hours = total_agent_hours * pct_hours_impaired
-    total_calls = total_agents * calls_per_agent
-    impaired_calls = total_calls * pct_calls_impaired
-    retries = impaired_calls * retry_rate
+    total_agent_hours    = total_agents * hours_per_agent
+    impaired_hours       = total_agent_hours * pct_hours_impaired
+    total_calls          = total_agents * calls_per_agent
+    impaired_calls       = total_calls * pct_calls_impaired
+    retries              = impaired_calls * retry_rate
 
-    fcr_impact_factor = -retry_rate
-    revised_fcr = fcr * (1.0 + fcr_impact_factor)
-    csat_impact_factor = -(retry_rate * 0.90)
-    revised_csat = csat * (1.0 + csat_impact_factor)
-    ces_converted = ces / (ces_divisor if ces_divisor > 0 else 7.5)
-    ces_impact_factor = -(retry_rate * 1.20)
-    revised_ces = ces_converted * (1.0 + ces_impact_factor)
+    revised_fcr          = fcr  * (1.0 - retry_rate)
+    revised_csat         = csat * (1.0 - retry_rate * 0.90)
+    ces_converted        = ces  / (ces_divisor if ces_divisor > 0 else 7.5)
+    revised_ces          = ces_converted * (1.0 - retry_rate * 1.20)
 
-    churn_risk_factor = min(1.0, max(0.0, retry_rate * churn_risk_multiplier))
-    baseline_churned_customers = customers * baseline_churn_rate
-    customers_at_risk = baseline_churned_customers * churn_risk_factor
-    revenue_at_risk = customers_at_risk * arpu
-    active_churn_customers = baseline_churned_customers * active_churn_share
-    active_churned_rev_baseline = active_churn_customers * arpu
-    required_upsell_revenue = active_churned_rev_baseline * upsell_to_churn_ratio
-    upsell_revenue_at_risk_shortfall = revenue_at_risk * upsell_to_churn_ratio
+    churn_risk_factor    = min(1.0, max(0.0, retry_rate * churn_risk_multiplier))
+    baseline_churned     = customers * baseline_churn_rate
+    customers_at_risk    = baseline_churned * churn_risk_factor
+    revenue_at_risk      = customers_at_risk * arpu
+
+    active_churn_customers       = baseline_churned * active_churn_share
+    active_churned_rev_baseline  = active_churn_customers * arpu
+    required_upsell_revenue      = active_churned_rev_baseline * upsell_to_churn_ratio
+    upsell_risk                  = revenue_at_risk * upsell_to_churn_ratio
+
     labor_ineff_cost = impaired_hours * cost_per_hour
-    coi = labor_ineff_cost + revenue_at_risk + upsell_revenue_at_risk_shortfall
+    coi              = labor_ineff_cost + revenue_at_risk + upsell_risk
 
     return {
         "total_agents": total_agents,
@@ -239,7 +244,7 @@ def calc_coi_nrr(inp: dict) -> dict:
         "churn_risk_factor": churn_risk_factor,
         "customers": customers,
         "baseline_churn_rate": baseline_churn_rate,
-        "baseline_churned_customers": baseline_churned_customers,
+        "baseline_churned_customers": baseline_churned,
         "active_churn_share": active_churn_share,
         "active_churn_customers": active_churn_customers,
         "arpu": arpu,
@@ -247,7 +252,7 @@ def calc_coi_nrr(inp: dict) -> dict:
         "upsell_to_churn_ratio": upsell_to_churn_ratio,
         "active_churned_rev_baseline": active_churned_rev_baseline,
         "required_upsell_revenue": required_upsell_revenue,
-        "upsell_revenue_at_risk_shortfall": upsell_revenue_at_risk_shortfall,
+        "upsell_revenue_at_risk_shortfall": upsell_risk,
         "cost_per_hour": cost_per_hour,
         "labor_inefficiency_cost": labor_ineff_cost,
         "total_cost_of_inaction": coi,
@@ -255,7 +260,10 @@ def calc_coi_nrr(inp: dict) -> dict:
     }
 
 
-def render_calc_1(excel_bytes: bytes) -> None:
+# ─────────────────────────────────────────
+# Render — Calculator 1
+# ─────────────────────────────────────────
+def render_calc_1(excel_bytes: bytes | None) -> None:
     st.title("Calculadora 1: Cost of Impairment (COI)")
 
     col_mode, col_help = st.columns([0.45, 0.55])
@@ -264,86 +272,104 @@ def render_calc_1(excel_bytes: bytes) -> None:
             "Modelo",
             options=["Retention", "NRR"],
             horizontal=True,
-            help="Use Retention para churn/revenue at risk e NRR para incluir risco de upsell.",
+            help="Retention: churn/revenue at risk | NRR: inclui risco de upsell.",
         )
     with col_help:
         st.info(
-            "As premissas iniciais são carregadas do Excel (abas COI Retention / COI NRR) "
-            "e viram inputs interativos. Os outputs são recalculados em tempo real e salvos "
-            "no session_state para a Calculadora 2."
+            "Premissas carregadas do Excel (se disponivel) ou inseridas manualmente. "
+            "Outputs recalculados em tempo real e repassados para a Calculadora 2."
         )
 
-if excel_bytes is not None:
-    params_ret = load_params_from_excel_bytes(excel_bytes, SHEET_RETENTION)
-    params_nrr = load_params_from_excel_bytes(excel_bytes, SHEET_NRR)
-else:
-    params_ret = {}
-    params_nrr = {}
+    # Carrega params do Excel ou usa dict vazio (modo manual usa defaults hardcoded)
+    if excel_bytes is not None:
+        params_ret = load_params_from_excel_bytes(excel_bytes, SHEET_RETENTION)
+        params_nrr = load_params_from_excel_bytes(excel_bytes, SHEET_NRR)
+    else:
+        params_ret = {}
+        params_nrr = {}
 
-    d_total_agents = _safe_float(params_ret.get("Total Agents", 1200))
-    d_hours_per_agent = _safe_float(params_ret.get("Hours per agent", 2080))
-    d_pct_hours_imp = _safe_float(params_ret.get("% of hours impaired", 0.035))
-    d_calls_per_agent = _safe_float(params_ret.get("Calls per agent", 25000))
-    d_pct_calls_imp = _safe_float(params_ret.get("% of calls impaired*", 0.04046))
-    d_customers = _safe_float(params_ret.get("Customers", 2_000_000))
-    d_calls_per_customer = _safe_float(params_ret.get("Calls per customer", 15))
-    d_calls_at_risk = _safe_float(params_ret.get("Calls per at risk customer**", 25.05))
-    d_switch_rate = _safe_float(params_ret.get("Switching rate 2+ incidents", 0.73))
-    d_base_churn = _safe_float(params_ret.get("Baseline Churn Rate", 0.15))
-    d_arpu = _safe_float(params_ret.get("ARPU", 1000))
-    d_cost_per_hour = _safe_float(params_ret.get("Cost per hour per agent", 20))
+    # Defaults (Excel se disponivel, senão hardcoded)
+    d_total_agents    = _safe_float(params_ret.get("Total Agents",              1200))
+    d_hours_per_agent = _safe_float(params_ret.get("Hours per agent",           2080))
+    d_pct_hours_imp   = _safe_float(params_ret.get("% of hours impaired",       0.035))
+    d_calls_per_agent = _safe_float(params_ret.get("Calls per agent",           25000))
+    d_pct_calls_imp   = _safe_float(params_ret.get("% of calls impaired*",      0.04046))
+    d_customers       = _safe_float(params_ret.get("Customers",                 2_000_000))
+    d_calls_cust      = _safe_float(params_ret.get("Calls per customer",        15))
+    d_calls_risk      = _safe_float(params_ret.get("Calls per at risk customer**", 25.05))
+    d_switch_rate     = _safe_float(params_ret.get("Switching rate 2+ incidents", 0.73))
+    d_base_churn      = _safe_float(params_ret.get("Baseline Churn Rate",       0.15))
+    d_arpu            = _safe_float(params_ret.get("ARPU",                      1000))
+    d_cost_hour       = _safe_float(params_ret.get("Cost per hour per agent",   20))
 
-    d_retry_rate = _safe_float(params_nrr.get("Retry Rate*", 0.06321875))
-    d_fcr = _safe_float(params_nrr.get("FCR", 0.75))
-    d_csat = _safe_float(params_nrr.get("CSAT", 0.8))
-    d_ces = _safe_float(params_nrr.get("CES", 5.0))
-    d_base_churn_nrr = _safe_float(params_nrr.get("Baseline churn rate", d_base_churn))
-    d_upsell_ratio = _safe_float(params_nrr.get("Upsell multiplier: Upsell-to-Churn Ratio", 2.2222222))
-    d_cost_per_hour_nrr = _safe_float(params_nrr.get("Agent cost per hour", d_cost_per_hour))
-    d_churn_risk_factor = _safe_float(params_nrr.get("Churn Risk Factor", 0.0819315))
-    d_churn_risk_mult = (d_churn_risk_factor / d_retry_rate) if d_retry_rate > 0 else 1.296
+    d_retry_rate      = _safe_float(params_nrr.get("Retry Rate*",               0.06321875))
+    d_fcr             = _safe_float(params_nrr.get("FCR",                       0.75))
+    d_csat            = _safe_float(params_nrr.get("CSAT",                      0.80))
+    d_ces             = _safe_float(params_nrr.get("CES",                       5.0))
+    d_base_churn_nrr  = _safe_float(params_nrr.get("Baseline churn rate",       d_base_churn))
+    d_upsell_ratio    = _safe_float(params_nrr.get("Upsell multiplier: Upsell-to-Churn Ratio", 2.2222222))
+    d_cost_hour_nrr   = _safe_float(params_nrr.get("Agent cost per hour",       d_cost_hour))
+    d_churn_rf        = _safe_float(params_nrr.get("Churn Risk Factor",         0.0819315))
+    d_churn_mult      = (d_churn_rf / d_retry_rate) if d_retry_rate > 0 else 1.296
 
     left, right = st.columns([0.58, 0.42])
+
     with left:
         st.subheader("Inputs")
         c1, c2, c3 = st.columns(3)
 
         with c1:
-            total_agents = st.number_input("Total Agents", min_value=1, max_value=500_000, value=int(d_total_agents), step=10)
-            hours_per_agent = st.number_input("Hours per agent (year)", min_value=1.0, max_value=10_000.0, value=float(d_hours_per_agent), step=10.0)
-            pct_hours_impaired = st.slider("% of hours impaired", min_value=0.0, max_value=0.30, value=float(d_pct_hours_imp), step=0.001, format="%.3f")
+            total_agents = st.number_input(
+                "Total Agents", min_value=1, max_value=500_000,
+                value=int(d_total_agents), step=10,
+            )
+            hours_per_agent = st.number_input(
+                "Hours per agent (year)", min_value=1.0, max_value=10_000.0,
+                value=float(d_hours_per_agent), step=10.0,
+            )
+            pct_hours_impaired = st.slider(
+                "% of hours impaired", 0.0, 0.30,
+                value=float(d_pct_hours_imp), step=0.001, format="%.3f",
+            )
 
         with c2:
-            calls_per_agent = st.number_input("Calls per agent (year)", min_value=0.0, max_value=5_000_000.0, value=float(d_calls_per_agent), step=500.0)
-            pct_calls_impaired = st.slider("% of calls impaired", min_value=0.0, max_value=0.30, value=float(d_pct_calls_imp), step=0.0005, format="%.4f")
+            calls_per_agent = st.number_input(
+                "Calls per agent (year)", min_value=0.0, max_value=5_000_000.0,
+                value=float(d_calls_per_agent), step=500.0,
+            )
+            pct_calls_impaired = st.slider(
+                "% of calls impaired", 0.0, 0.30,
+                value=float(d_pct_calls_imp), step=0.0005, format="%.4f",
+            )
             cost_per_hour = st.number_input(
-                "Cost per hour per agent",
-                min_value=0.0,
-                max_value=1_000.0,
-                value=float(d_cost_per_hour_nrr if coi_mode == "NRR" else d_cost_per_hour),
+                "Cost per hour per agent", min_value=0.0, max_value=1_000.0,
+                value=float(d_cost_hour_nrr if coi_mode == "NRR" else d_cost_hour),
                 step=1.0,
             )
 
         with c3:
-            customers = st.number_input("Customers", min_value=0.0, max_value=1e9, value=float(d_customers), step=10_000.0, format="%.0f")
-            baseline_churn_rate = st.slider(
-                "Baseline churn rate",
-                min_value=0.0,
-                max_value=0.50,
-                value=float(d_base_churn_nrr if coi_mode == "NRR" else d_base_churn),
-                step=0.001,
-                format="%.3f",
+            customers = st.number_input(
+                "Customers", min_value=0.0, max_value=1e9,
+                value=float(d_customers), step=10_000.0, format="%.0f",
             )
-            arpu = st.number_input("ARPU", min_value=0.0, max_value=1_000_000.0, value=float(d_arpu), step=10.0)
+            baseline_churn_rate = st.slider(
+                "Baseline churn rate", 0.0, 0.50,
+                value=float(d_base_churn_nrr if coi_mode == "NRR" else d_base_churn),
+                step=0.001, format="%.3f",
+            )
+            arpu = st.number_input(
+                "ARPU", min_value=0.0, max_value=1_000_000.0,
+                value=float(d_arpu), step=10.0,
+            )
 
-        with st.expander("Parâmetros avançados", expanded=False):
+        with st.expander("Parametros avancados", expanded=False):
             a1, a2, a3 = st.columns(3)
             with a1:
-                active_churn_share = st.slider("Active churn customers (share)", 0.0, 1.0, value=0.60, step=0.01)
-                cx_driven_share = st.slider("CX-driven churns (share of active)", 0.0, 1.0, value=0.50, step=0.01)
+                active_churn_share = st.slider("Active churn share", 0.0, 1.0, value=0.60, step=0.01)
+                cx_driven_share    = st.slider("CX-driven share of active", 0.0, 1.0, value=0.50, step=0.01)
             with a2:
-                calls_per_customer = st.number_input("Calls per customer", min_value=0.0, max_value=500.0, value=float(d_calls_per_customer), step=0.5)
-                calls_per_at_risk_customer = st.number_input("Calls per at-risk customer", min_value=0.0, max_value=500.0, value=float(d_calls_at_risk), step=0.5)
+                calls_per_customer         = st.number_input("Calls per customer", 0.0, 500.0, value=float(d_calls_cust), step=0.5)
+                calls_per_at_risk_customer = st.number_input("Calls per at-risk customer", 0.0, 500.0, value=float(d_calls_risk), step=0.5)
             with a3:
                 switching_rate_2plus = st.slider("Switching rate (2+ incidents)", 0.0, 1.0, value=float(d_switch_rate), step=0.01)
 
@@ -372,20 +398,20 @@ else:
                 with n1:
                     retry_rate = st.slider("Retry Rate", 0.0, 0.30, value=float(d_retry_rate), step=0.0005, format="%.4f")
                     churn_risk_multiplier = st.number_input(
-                        "Churn risk multiplier",
-                        min_value=0.0,
-                        max_value=50.0,
-                        value=float(d_churn_risk_mult),
-                        step=0.05,
-                        help="Churn Risk Factor = min(1, Retry Rate * multiplier).",
+                        "Churn risk multiplier", min_value=0.0, max_value=50.0,
+                        value=float(d_churn_mult), step=0.05,
+                        help="Churn Risk Factor = min(1, Retry Rate x multiplier).",
                     )
                 with n2:
-                    fcr = st.slider("FCR", 0.0, 1.0, value=float(d_fcr), step=0.01)
+                    fcr  = st.slider("FCR",  0.0, 1.0, value=float(d_fcr),  step=0.01)
                     csat = st.slider("CSAT", 0.0, 1.0, value=float(d_csat), step=0.01)
                 with n3:
-                    ces = st.number_input("CES (escala original)", min_value=0.0, max_value=10.0, value=float(d_ces), step=0.1)
-                    ces_divisor = st.number_input("CES divisor (converter p/ 0-1)", min_value=1.0, max_value=20.0, value=7.5, step=0.5)
-                    upsell_to_churn_ratio = st.number_input("Upsell-to-Churn Ratio", min_value=0.0, max_value=20.0, value=float(d_upsell_ratio), step=0.05)
+                    ces         = st.number_input("CES (escala original)", 0.0, 10.0, value=float(d_ces), step=0.1)
+                    ces_divisor = st.number_input("CES divisor (p/ 0-1)", 1.0, 20.0, value=7.5, step=0.5)
+                    upsell_to_churn_ratio = st.number_input(
+                        "Upsell-to-Churn Ratio", 0.0, 20.0,
+                        value=float(d_upsell_ratio), step=0.05,
+                    )
 
             inp_nrr = dict(inp_common)
             inp_nrr.update({
@@ -403,21 +429,26 @@ else:
         st.subheader("Outputs (tempo real)")
         m1, m2 = st.columns(2)
         with m1:
-            st.metric("Labor inefficiency", fmt_currency(outputs["labor_inefficiency_cost"]))
-            st.metric("Revenue at risk", fmt_currency(outputs["revenue_at_risk"]))
+            st.metric("Labor inefficiency",  fmt_currency(outputs["labor_inefficiency_cost"]))
+            st.metric("Revenue at risk",      fmt_currency(outputs["revenue_at_risk"]))
         with m2:
             if outputs["mode"] == "NRR":
                 st.metric("Upsell shortfall risk", fmt_currency(outputs["upsell_revenue_at_risk_shortfall"]))
             st.metric("Total Cost of Inaction", fmt_currency(outputs["total_cost_of_inaction"]))
 
         if outputs["mode"] == "Retention":
-            st.caption(f"P(2+ impaired calls) (Poisson) = {outputs['probability_2plus_impaired_calls']:.4f}")
+            st.caption(f"P(2+ impaired calls) Poisson = {outputs['probability_2plus_impaired_calls']:.4f}")
             st.caption(f"Customers at risk = {outputs['customers_at_risk']:.0f}")
         else:
             st.caption(f"Churn Risk Factor = {outputs['churn_risk_factor']:.4f}")
-            st.caption(f"Revised FCR/CSAT/CES = {outputs['revised_fcr']:.3f} / {outputs['revised_csat']:.3f} / {outputs['revised_ces']:.3f}")
+            st.caption(
+                f"Revised FCR / CSAT / CES = "
+                f"{outputs['revised_fcr']:.3f} / "
+                f"{outputs['revised_csat']:.3f} / "
+                f"{outputs['revised_ces']:.3f}"
+            )
 
-        st.subheader("Gráficos (Calc 1)")
+        st.subheader("Graficos (Calc 1)")
 
         if outputs["mode"] == "Retention":
             df_components = pd.DataFrame({
@@ -434,66 +465,72 @@ else:
                 ],
             })
 
-        fig1 = px.bar(df_components, x="Componente", y="Valor", text_auto=".2s", title="Decomposição do Cost of Inaction")
+        fig1 = px.bar(
+            df_components, x="Componente", y="Valor",
+            text_auto=".2s", title="Decomposicao do Cost of Inaction",
+        )
         fig1.update_layout(height=320, margin=dict(l=10, r=10, t=50, b=10))
         st.plotly_chart(fig1, use_container_width=True)
 
-        mitigation = st.slider("Simular mitigação (%)", 0.0, 1.0, value=0.0, step=0.01, format="%.2f")
+        mitigation = st.slider("Simular mitigacao (%)", 0.0, 1.0, value=0.0, step=0.01, format="%.2f")
         before = outputs["total_cost_of_inaction"]
-        after = before * (1.0 - mitigation)
-        df_before_after = pd.DataFrame({"Estado": ["Before", "After"], "Total COI": [before, after]})
-
-        fig2 = px.bar(df_before_after, x="Estado", y="Total COI", text_auto=".2s", title="Before vs After (simulação)")
+        after  = before * (1.0 - mitigation)
+        fig2 = px.bar(
+            pd.DataFrame({"Estado": ["Before", "After"], "Total COI": [before, after]}),
+            x="Estado", y="Total COI", text_auto=".2s", title="Before vs After (simulacao)",
+        )
         fig2.update_layout(height=320, margin=dict(l=10, r=10, t=50, b=10))
         st.plotly_chart(fig2, use_container_width=True)
 
-    st.session_state["calc1_outputs"] = outputs
+    st.session_state["calc1_outputs"]      = outputs
     st.session_state["calc1_components_df"] = df_components
 
 
-# -----------------------------
-# Calculator 2: Business Impact
-# -----------------------------
+# ─────────────────────────────────────────
+# Calculator 2 — Business Impact
+# ─────────────────────────────────────────
 def calculate_business_impact(calc1_out: dict, scenario: str, bi_inp: dict) -> dict:
     mult = scenario_multipliers(scenario)
 
-    total_coi = float(calc1_out.get("total_cost_of_inaction", 0.0))
-    labor = float(calc1_out.get("labor_inefficiency_cost", 0.0))
-    revenue = float(calc1_out.get("revenue_at_risk", 0.0))
+    total_coi   = float(calc1_out.get("total_cost_of_inaction", 0.0))
+    labor       = float(calc1_out.get("labor_inefficiency_cost", 0.0))
+    revenue     = float(calc1_out.get("revenue_at_risk", 0.0))
     upsell_risk = float(calc1_out.get("upsell_revenue_at_risk_shortfall", 0.0))
 
-    churn_reduction = _safe_float(bi_inp.get("churn_reduction_pct"))
-    revenue_impact = _safe_float(bi_inp.get("revenue_impact_pct"))
-    labor_recovery = _safe_float(bi_inp.get("labor_recovery_pct"))
+    churn_reduction      = _safe_float(bi_inp.get("churn_reduction_pct"))
+    revenue_impact       = _safe_float(bi_inp.get("revenue_impact_pct"))
+    labor_recovery       = _safe_float(bi_inp.get("labor_recovery_pct"))
     annual_solution_cost = _safe_float(bi_inp.get("annual_solution_cost"))
 
-    recovered_revenue = revenue * churn_reduction * mult["churn_mult"]
-    recovered_upsell = upsell_risk * revenue_impact * mult["rev_mult"]
-    labor_savings = labor * labor_recovery * mult["eff_mult"]
+    recovered_revenue = revenue     * churn_reduction * mult["churn_mult"]
+    recovered_upsell  = upsell_risk * revenue_impact  * mult["rev_mult"]
+    labor_savings     = labor       * labor_recovery  * mult["eff_mult"]
 
     gross_benefit = recovered_revenue + recovered_upsell + labor_savings
-    net_impact = gross_benefit - annual_solution_cost
+    net_impact    = gross_benefit - annual_solution_cost
     remaining_coi = max(0.0, total_coi - gross_benefit)
 
-    roi = (net_impact / annual_solution_cost) if annual_solution_cost > 0 else np.nan
-    payback_months = (annual_solution_cost / (gross_benefit / 12.0)) if gross_benefit > 0 else np.inf
+    roi            = (net_impact / annual_solution_cost) if annual_solution_cost > 0 else float("nan")
+    monthly_net    = net_impact / 12.0
+    payback_months = (annual_solution_cost / (gross_benefit / 12.0)) if gross_benefit > 0 else float("inf")
 
     return {
-        "scenario": scenario,
-        "multipliers": str(mult),
-        "total_coi": total_coi,
-        "labor": labor,
-        "revenue": revenue,
-        "upsell_risk": upsell_risk,
-        "recovered_revenue": recovered_revenue,
-        "recovered_upsell": recovered_upsell,
-        "labor_savings": labor_savings,
-        "gross_benefit": gross_benefit,
+        "scenario":            scenario,
+        "multipliers":         str(mult),
+        "total_coi":           total_coi,
+        "labor":               labor,
+        "revenue":             revenue,
+        "upsell_risk":         upsell_risk,
+        "recovered_revenue":   recovered_revenue,
+        "recovered_upsell":    recovered_upsell,
+        "labor_savings":       labor_savings,
+        "gross_benefit":       gross_benefit,
         "annual_solution_cost": annual_solution_cost,
-        "net_impact": net_impact,
-        "remaining_coi": remaining_coi,
-        "roi": roi,
-        "payback_months": payback_months,
+        "net_impact":          net_impact,
+        "remaining_coi":       remaining_coi,
+        "roi":                 roi,
+        "monthly_net":         monthly_net,
+        "payback_months":      payback_months,
     }
 
 
@@ -510,7 +547,10 @@ def make_waterfall(bi_out: dict) -> go.Figure:
         ],
         connector={"line": {"color": "rgba(0,0,0,0.25)"}},
     ))
-    fig.update_layout(title="Waterfall: impacto anual (Business Impact)", height=360, margin=dict(l=10, r=10, t=60, b=10))
+    fig.update_layout(
+        title="Waterfall: impacto anual (Business Impact)",
+        height=360, margin=dict(l=10, r=10, t=60, b=10),
+    )
     return fig
 
 
@@ -518,8 +558,7 @@ def df_to_excel_bytes(sheets: dict) -> bytes:
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
         for name, df in sheets.items():
-            safe_name = name[:31] if name else "Sheet1"
-            df.to_excel(writer, index=False, sheet_name=safe_name)
+            df.to_excel(writer, index=False, sheet_name=name[:31])
     buf.seek(0)
     return buf.read()
 
@@ -527,18 +566,17 @@ def df_to_excel_bytes(sheets: dict) -> bytes:
 def build_summary_markdown(calc1_out: dict, bi_out: dict) -> str:
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Resolve os valores ANTES do f-string para evitar backslash em expressão
-    pb = bi_out.get("payback_months", np.inf)
-    pb_str = "inf" if np.isinf(pb) else f"{pb:.1f}"
+    pb  = bi_out.get("payback_months", float("inf"))
+    pb_str  = "inf" if (pb != pb or pb == float("inf")) else f"{pb:.1f}"
 
-    roi = bi_out.get("roi", np.nan)
-    roi_str = "n/a" if np.isnan(roi) else f"{roi:.2f}x"
+    roi = bi_out.get("roi", float("nan"))
+    roi_str = "n/a" if (roi != roi) else f"{roi:.2f}x"
 
     upsell_line = ""
     if calc1_out.get("mode") == "NRR":
         upsell_line = f"- Upsell shortfall risk: {fmt_currency(calc1_out.get('upsell_revenue_at_risk_shortfall', 0.0))}\n"
 
-    lines = (
+    return (
         f"# Resumo - COI & Business Impact\n"
         f"- Gerado em: {ts}\n"
         f"\n"
@@ -557,20 +595,6 @@ def build_summary_markdown(calc1_out: dict, bi_out: dict) -> str:
         f"- Payback (meses): {pb_str}\n"
         f"- ROI: {roi_str}\n"
     )
-    return lines
-
-
-
-def _sanitize_pdf(text: str) -> str:
-    """Converte caracteres fora do latin-1 para equivalentes ASCII."""
-    replacements = {
-        "∞": "inf", "×": "x", "≤": "<=", "≥": ">=",
-        "\u2019": "'", "\u2018": "'", "\u201c": '"', "\u201d": '"',
-        "\u2013": "-", "\u2014": "-", "R$": "BRL",
-    }
-    for char, rep in replacements.items():
-        text = text.replace(char, rep)
-    return text.encode("latin-1", errors="replace").decode("latin-1")
 
 
 def markdown_to_pdf_bytes(md_text: str) -> bytes:
@@ -595,27 +619,27 @@ def markdown_to_pdf_bytes(md_text: str) -> bytes:
     return bytes(raw) if isinstance(raw, (bytes, bytearray)) else raw.encode("latin-1", errors="replace")
 
 
-
 def render_calc_2() -> None:
     st.title("Calculadora 2: Business Impact")
 
     calc1_out = st.session_state.get("calc1_outputs")
     if not calc1_out:
-        st.warning("⚠️ Execute a Calculadora 1 primeiro para popular os outputs no session_state.")
+        st.warning("Execute a Calculadora 1 primeiro para popular os outputs no session_state.")
         return
 
     top_l, top_r = st.columns([0.62, 0.38])
+
     with top_l:
-        st.subheader("Inputs & Cenários")
-        scenario = st.radio("Cenário", ["Conservador", "Moderado", "Agressivo"], horizontal=True)
+        st.subheader("Inputs & Cenarios")
+        scenario = st.radio("Cenario", ["Conservador", "Moderado", "Agressivo"], horizontal=True)
 
         i1, i2, i3 = st.columns(3)
         with i1:
             churn_reduction_pct = st.slider("Churn reduction sobre Revenue at risk", 0.0, 1.0, value=0.25, step=0.01)
-            revenue_impact_pct = st.slider("Revenue impact sobre Upsell shortfall (NRR)", 0.0, 1.0, value=0.20, step=0.01)
+            revenue_impact_pct  = st.slider("Revenue impact sobre Upsell shortfall", 0.0, 1.0, value=0.20, step=0.01)
         with i2:
-            labor_recovery_pct = st.slider("Labor recovery sobre inefficiency", 0.0, 1.0, value=0.30, step=0.01)
-            annual_solution_cost = st.number_input("Custo anual da solução", min_value=0.0, max_value=1e9, value=5_000_000.0, step=50_000.0)
+            labor_recovery_pct   = st.slider("Labor recovery sobre inefficiency", 0.0, 1.0, value=0.30, step=0.01)
+            annual_solution_cost = st.number_input("Custo anual da solucao", 0.0, 1e9, value=5_000_000.0, step=50_000.0)
         with i3:
             st.caption("Base (Calc 1)")
             st.write(f"- Total COI: {fmt_currency(calc1_out.get('total_cost_of_inaction', 0.0))}")
@@ -639,46 +663,54 @@ def render_calc_2() -> None:
         st.subheader("KPIs")
         k1, k2 = st.columns(2)
         with k1:
-            st.metric("Gross benefit", fmt_currency(bi_out["gross_benefit"]))
-            st.metric("Remaining COI", fmt_currency(bi_out["remaining_coi"]))
+            st.metric("Gross benefit",  fmt_currency(bi_out["gross_benefit"]))
+            st.metric("Remaining COI",  fmt_currency(bi_out["remaining_coi"]))
         with k2:
             st.metric("Net impact", fmt_currency(bi_out["net_impact"]))
             pb = bi_out["payback_months"]
-            st.metric("Payback (months)", "∞" if np.isinf(pb) else f"{pb:.1f}")
+            st.metric("Payback (months)", "inf" if pb == float("inf") else f"{pb:.1f}")
         roi = bi_out["roi"]
-        st.caption(f"ROI: {'n/a' if np.isnan(roi) else f'{roi:.2f}x'}")
+        roi_str = "n/a" if (roi != roi) else f"{roi:.2f}x"
+        st.caption(f"ROI: {roi_str}")
 
-    st.subheader("Gráficos (Calc 2)")
+    st.subheader("Graficos (Calc 2)")
     cA, cB = st.columns([0.55, 0.45])
     with cA:
         st.plotly_chart(make_waterfall(bi_out), use_container_width=True)
     with cB:
-        scenarios = ["Conservador", "Moderado", "Agressivo"]
-        rows = [{"Scenario": s, "Net impact": calculate_business_impact(calc1_out, s, bi_inp)["net_impact"]} for s in scenarios]
-        df_scen = pd.DataFrame(rows)
-        fig = px.bar(df_scen, x="Scenario", y="Net impact", text_auto=".2s", title="Net impact por cenário")
-        fig.update_layout(height=360, margin=dict(l=10, r=10, t=60, b=10))
-        st.plotly_chart(fig, use_container_width=True)
+        rows = [
+            {"Scenario": s, "Net impact": calculate_business_impact(calc1_out, s, bi_inp)["net_impact"]}
+            for s in ["Conservador", "Moderado", "Agressivo"]
+        ]
+        fig_scen = px.bar(
+            pd.DataFrame(rows), x="Scenario", y="Net impact",
+            text_auto=".2s", title="Net impact por cenario",
+        )
+        fig_scen.update_layout(height=360, margin=dict(l=10, r=10, t=60, b=10))
+        st.plotly_chart(fig_scen, use_container_width=True)
 
-    months = np.arange(1, 13)
+    months  = np.arange(1, 13)
     cum_net = np.cumsum(np.repeat((bi_out["gross_benefit"] - bi_out["annual_solution_cost"]) / 12.0, 12))
-    df_month = pd.DataFrame({"Month": months, "Cumulative net": cum_net})
-    fig_line = px.area(df_month, x="Month", y="Cumulative net", title="Cumulativo (12 meses): benefício líquido")
+    fig_line = px.area(
+        pd.DataFrame({"Month": months, "Cumulative net": cum_net}),
+        x="Month", y="Cumulative net", title="Cumulativo (12 meses): beneficio liquido",
+    )
     fig_line.update_layout(height=300, margin=dict(l=10, r=10, t=60, b=10))
     st.plotly_chart(fig_line, use_container_width=True)
 
-    st.subheader("Exportação")
+    # ── Exportacao ──
+    st.subheader("Exportacao")
 
     calc1_components_df = st.session_state.get("calc1_components_df", pd.DataFrame())
     consolidated = pd.DataFrame([
-        {"metric": "calc1_total_coi",        "value": calc1_out.get("total_cost_of_inaction", 0.0)},
-        {"metric": "calc1_labor",             "value": calc1_out.get("labor_inefficiency_cost", 0.0)},
-        {"metric": "calc1_revenue_risk",      "value": calc1_out.get("revenue_at_risk", 0.0)},
-        {"metric": "calc1_upsell_risk",       "value": calc1_out.get("upsell_revenue_at_risk_shortfall", 0.0)},
-        {"metric": "calc2_gross_benefit",     "value": bi_out.get("gross_benefit", 0.0)},
-        {"metric": "calc2_solution_cost",     "value": bi_out.get("annual_solution_cost", 0.0)},
-        {"metric": "calc2_net_impact",        "value": bi_out.get("net_impact", 0.0)},
-        {"metric": "calc2_payback_months",    "value": bi_out.get("payback_months", np.inf)},
+        {"metric": "calc1_total_coi",     "value": calc1_out.get("total_cost_of_inaction", 0.0)},
+        {"metric": "calc1_labor",         "value": calc1_out.get("labor_inefficiency_cost", 0.0)},
+        {"metric": "calc1_revenue_risk",  "value": calc1_out.get("revenue_at_risk", 0.0)},
+        {"metric": "calc1_upsell_risk",   "value": calc1_out.get("upsell_revenue_at_risk_shortfall", 0.0)},
+        {"metric": "calc2_gross_benefit", "value": bi_out.get("gross_benefit", 0.0)},
+        {"metric": "calc2_solution_cost", "value": bi_out.get("annual_solution_cost", 0.0)},
+        {"metric": "calc2_net_impact",    "value": bi_out.get("net_impact", 0.0)},
+        {"metric": "calc2_payback_months","value": bi_out.get("payback_months", float("inf"))},
     ])
 
     csv_bytes   = consolidated.to_csv(index=False).encode("utf-8")
@@ -693,20 +725,21 @@ def render_calc_2() -> None:
 
     e1, e2, e3, e4 = st.columns(4)
     with e1:
-        st.download_button("⬇️ CSV",      data=csv_bytes,   file_name="results.csv",     mime="text/csv")
+        st.download_button("Download CSV",      csv_bytes,   "results.csv",    "text/csv")
     with e2:
-        st.download_button("⬇️ Excel",    data=excel_bytes, file_name="results.xlsx",    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        st.download_button("Download Excel",    excel_bytes, "results.xlsx",
+                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     with e3:
-        st.download_button("⬇️ Markdown", data=md.encode(), file_name="summary.md",      mime="text/markdown")
+        st.download_button("Download Markdown", md.encode(), "summary.md",     "text/markdown")
     with e4:
-        st.download_button("⬇️ PDF",      data=pdf_bytes,   file_name="summary.pdf",     mime="application/pdf")
+        st.download_button("Download PDF",      pdf_bytes,   "summary.pdf",    "application/pdf")
 
 
-# -----------------------------
+# ─────────────────────────────────────────
 # Main
-# -----------------------------
+# ─────────────────────────────────────────
 def main() -> None:
-    st.sidebar.title("Navegação")
+    st.sidebar.title("Navegacao")
     page = st.sidebar.radio(
         "Escolha",
         ["Calculadora 1: Cost of Impairment", "Calculadora 2: Business Impact"],
@@ -714,13 +747,12 @@ def main() -> None:
     )
 
     excel_bytes = get_excel_bytes_from_sidebar()
-    # Não bloqueia mais: modo manual funciona sem Excel
+    # Sem st.stop(): modo manual funciona sem Excel
 
     if page.startswith("Calculadora 1"):
         render_calc_1(excel_bytes)
     else:
         render_calc_2()
-
 
 
 if __name__ == "__main__":
