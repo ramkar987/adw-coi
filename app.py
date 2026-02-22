@@ -800,14 +800,13 @@ def main() -> None:
 
     excel_bytes = get_excel_bytes_from_sidebar()
 
+    # Bloqueia renderização até o arquivo estar disponível
+    if excel_bytes is None:
+        st.info("📂 Faça o upload do arquivo Excel na barra lateral para começar.")
+        st.stop()  # ← interrompe sem erro
+
     if page.startswith("Calculadora 1"):
         render_calc_1(excel_bytes)
     else:
         render_calc_2()
 
-
-if __name__ == "__main__":
-    # session_state keys baseline
-    st.session_state.setdefault("calc1_outputs", None)
-    st.session_state.setdefault("calc2_outputs", None)
-    main()
